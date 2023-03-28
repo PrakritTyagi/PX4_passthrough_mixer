@@ -1,0 +1,40 @@
+#!/bin/sh
+#
+# Multicopter default parameters.
+#
+# NOTE: Script variables are declared/initialized/unset in the rcS script.
+#
+set VEHICLE_TYPE mc
+# MAV_TYPE_QUADROTOR 2
+param set-default MAV_TYPE 2
+if param compare IMU_GYRO_RATEMAX 400
+then
+    param set-default IMU_GYRO_RATEMAX 800
+fi
+param set-default NAV_ACC_RAD 2
+param set-default RTL_RETURN_ALT 30
+param set-default RTL_DESCEND_ALT 10
+param set-default PWM_MAIN_MAX 1950
+param set-default PWM_MAIN_MIN 1075
+param set-default PWM_MAIN_RATE 400
+param set-default GPS_UBX_DYNMODEL 6
+#
+# This is the gimbal pass mixer.
+#
+set MIXER_AUX pass
+#set MIXER quad_x
+#not using mixer. just directly publishing to actuator motors
+set MIXER pass
+#activate the pwm channels
+set PWM_OUT 1234
+#set PWM_AUX_OUT 1234
+#added in
+#have the motors be controlled by the actuator_motors topic
+param set-default PWM_MAIN_FUNC1 101
+param set-default PWM_MAIN_FUNC2 102
+param set-default PWM_MAIN_FUNC3 103
+param set-default PWM_MAIN_FUNC4 104
+echo "PWM MAIN FUNCTIONS BUILT"
+#enable the dynamic mixer
+param set-default SYS_CTRL_ALLOC 1
+echo "CONTROL ALLOCATOR ON"
