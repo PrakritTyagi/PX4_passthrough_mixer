@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright 2018 PX4 Development Team. All rights reserved.
+ * Copyright 2020 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -31,72 +31,182 @@
  ****************************************************************************/
 
 /**
- * @brief Actuator Motors uORB topic adverstiser 
- * @file actuator_publisher.cpp
+ * @brief Offboard control example
+ * @file offboard_control.cpp
  * @addtogroup examples
- * @author Fausto Vega <fvega@andrew.cmu.edu>
+ * @author Mickey Cowden <info@cowden.tech>
+ * @author Nuno Marques <nuno.marques@dronesolutions.io>
+
+ * The TrajectorySetpoint message and the OFFBOARD mode in general are under an ongoing update.
+ * Please refer to PR: https://github.com/PX4/PX4-Autopilot/pull/16739 for more info. 
+ * As per PR: https://github.com/PX4/PX4-Autopilot/pull/17094, the format
+ * of the TrajectorySetpoint message shall change.
  */
 
-#include <chrono>
+#include <px4_msgs/msg/offboard_control_mode.hpp>
+#include <px4_msgs/msg/actuator_motors.hpp>
+#include <px4_msgs/msg/timesync.hpp>
+#include <px4_msgs/msg/vehicle_command.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <px4_msgs/msg/debug_vect.hpp>
-#include <px4_msgs/msg/actuator_motors.hpp> //Add the actuator motors message
-#include <px4_msgs/msg/timesync.hpp> //add time sync message
+#include <stdint.h>
 
+#include <chrono>
+#include <iostream>
 
-using namespace px4_msgs::msg;
+using namespace std::chrono;
 using namespace std::chrono_literals;
+using namespace px4_msgs::msg;
 
-class ActuatorAdvertiser : public rclcpp::Node
-{
+class ActuatorPublisher : public rclcpp::Node {
 public:
-	ActuatorAdvertiser() : Node("actuator_advertiser") {
+	ActuatorPublisher() : Node("actuator_publisher") {
 #ifdef ROS_DEFAULT_API
-        actuator_pub_= this->create_publisher<px4_msgs::msg::ActuatorMotors>("fmu/actuator_motors/in", 10);
-
+		offboard_control_mode_publisher_ =
+			this->create_publisher<OffboardControlMode>("fmu/offboard_control_mode/in", 10);
+		vehicle_command_publisher_ =
+			this->create_publisher<VehicleCommand>("fmu/vehicle_command/in", 10);
+        actuator_motors_publisher_ =
+            this->create_publisher<ActuatorMotors>("fmu/actuator_motors/in", 10);
 #else
-        actuator_pub_= this->create_publisher<px4_msgs::msg::ActuatorMotors>("fmu/actuator_motors/in");
-
+		offboard_control_mode_publisher_ =
+			this->create_publisher<OffboardControlMode>("fmu/offboard_control_mode/in");
+		vehicle_command_publisher_ =
+			this->create_publisher<VehicleCommand>("fmu/vehicle_command/in");
+        actuator_motors_publisher_ =
+            this->create_publisher<ActuatorMotors>("fmu/actuator_motors/in");
 #endif
 
+		// get common timestamp
 		timesync_sub_ =
 			this->create_subscription<px4_msgs::msg::Timesync>("fmu/timesync/out", 10,
 				[this](const px4_msgs::msg::Timesync::UniquePtr msg) {
 					timestamp_.store(msg->timestamp);
 				});
 
+		offboard_setpoint_counter_ = 0;
 
-		auto timer_callback =
-		[this]()->void {
-            auto actuator_motors = px4_msgs::msg::ActuatorMotors();
-			actuator_motors.timestamp =  timestamp_.load();
-            //actuator_motors.timestamp = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()).time_since_epoch().count();
-            //actuator_motors.timestamp_sample = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()).time_since_epoch().count();
-			actuator_motors.control[0] = 0.15;
-            actuator_motors.control[1] = 0.15;
-            actuator_motors.control[2] = 0.15;
-            actuator_motors.control[3] = 0.15;
+		auto timer_callback = [this]() -> void {
 
-            this->actuator_pub_->publish(actuator_motors);
+			if (offboard_setpoint_counter_ == 10) {
+				// Change to Offboard mode after 10 setpoints
+				this->publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
+
+				// Arm the vehicle
+				this->arm();
+			}
+
+            		// offboard_control_mode needs to be paired with trajectory_setpoint
+			publish_offboard_control_mode();
+            publish_actuator_motors();
+
+            // stop the counter after reaching 11
+			if (offboard_setpoint_counter_ < 11) {
+				offboard_setpoint_counter_++;
+			}
 		};
-
-        timer_ = this->create_wall_timer(10ms, timer_callback); //running at 100 Hz
+		timer_ = this->create_wall_timer(100ms, timer_callback);
 	}
+
+	void arm() const;
+	void disarm() const;
 
 private:
 	rclcpp::TimerBase::SharedPtr timer_;
-	rclcpp::Publisher<px4_msgs::msg::ActuatorMotors>::SharedPtr actuator_pub_;
+
+	rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_control_mode_publisher_;
+	rclcpp::Publisher<VehicleCommand>::SharedPtr vehicle_command_publisher_;
+    rclcpp::Publisher<ActuatorMotors>::SharedPtr actuator_motors_publisher_;
 	rclcpp::Subscription<px4_msgs::msg::Timesync>::SharedPtr timesync_sub_;
+
 	std::atomic<uint64_t> timestamp_;   //!< common synced timestamped
 
+	uint64_t offboard_setpoint_counter_;   //!< counter for the number of setpoints sent
+
+	void publish_offboard_control_mode() const;
+	void publish_actuator_motors() const;
+	void publish_vehicle_command(uint16_t command, float param1 = 0.0,
+				     float param2 = 0.0) const;
 };
 
-int main(int argc, char *argv[])
-{
-	std::cout << "Starting actuator_motors advertiser node..." << std::endl;
+/**
+ * @brief Send a command to Arm the vehicle
+ */
+void ActuatorPublisher::arm() const {
+	publish_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0);
+
+	RCLCPP_INFO(this->get_logger(), "Arm command send");
+}
+
+/**
+ * @brief Send a command to Disarm the vehicle
+ */
+void ActuatorPublisher::disarm() const {
+	publish_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 0.0);
+
+	RCLCPP_INFO(this->get_logger(), "Disarm command send");
+}
+
+/**
+ * @brief Publish the offboard control mode.
+ *        For this example, only position and altitude controls are active.
+ */
+void ActuatorPublisher::publish_offboard_control_mode() const {
+	OffboardControlMode msg{};
+	msg.timestamp = timestamp_.load();
+	msg.position = false;
+	msg.velocity = false;
+	msg.acceleration = false;
+	msg.attitude = false;
+	msg.body_rate = false;
+    msg.actuator = true;
+
+	offboard_control_mode_publisher_->publish(msg);
+}
+
+
+/**
+ * @brief Publish a trajectory setpoint
+ *        For this example, it sends a trajectory setpoint to make the
+ *        vehicle hover at 5 meters with a yaw angle of 180 degrees.
+ */
+void ActuatorPublisher::publish_actuator_motors() const {
+	ActuatorMotors msg{};
+	msg.timestamp = timestamp_.load();
+	msg.control[0] = 0.80;
+    msg.control[1] = 0.80;
+    msg.control[2] = 0.80;
+    msg.control[3] = 0.80;
+
+	actuator_motors_publisher_->publish(msg);
+}
+
+/**
+ * @brief Publish vehicle commands
+ * @param command   Command code (matches VehicleCommand and MAVLink MAV_CMD codes)
+ * @param param1    Command parameter 1
+ * @param param2    Command parameter 2
+ */
+void ActuatorPublisher::publish_vehicle_command(uint16_t command, float param1,
+					      float param2) const {
+	VehicleCommand msg{};
+	msg.timestamp = timestamp_.load();
+	msg.param1 = param1;
+	msg.param2 = param2;
+	msg.command = command;
+	msg.target_system = 1;
+	msg.target_component = 1;
+	msg.source_system = 1;
+	msg.source_component = 1;
+	msg.from_external = true;
+
+	vehicle_command_publisher_->publish(msg);
+}
+
+int main(int argc, char* argv[]) {
+	std::cout << "Starting offboard control node for publishing to actuator motors..." << std::endl;
 	setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 	rclcpp::init(argc, argv);
-	rclcpp::spin(std::make_shared<ActuatorAdvertiser>());
+	rclcpp::spin(std::make_shared<ActuatorPublisher>());
 
 	rclcpp::shutdown();
 	return 0;
