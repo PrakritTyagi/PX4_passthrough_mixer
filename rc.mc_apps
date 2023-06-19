@@ -61,17 +61,13 @@ fi
 #
 # Start Multicopter Rate Controller.
 #
-
-#commenting out
 #mc_rate_control start
 
 #
 # Start Multicopter Attitude Controller.
 #
-#commenting out
 #mc_att_control start
 
-#commenting out
 #if param greater -s MC_AT_EN 0
 #then
 #	mc_autotune_attitude_control start
@@ -79,7 +75,7 @@ fi
 
 #
 # Start Multicopter Position Controller.
-#commenting out
+#
 #mc_hover_thrust_estimator start
 #flight_mode_manager start
 #mc_pos_control start
@@ -87,4 +83,4 @@ fi
 #
 # Start Multicopter Land Detector.
 #
-land_detector start multicopter
+#land_detector start multicopter
